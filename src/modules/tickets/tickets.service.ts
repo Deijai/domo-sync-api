@@ -14,7 +14,7 @@ import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto
 import { QueueGateway } from './queue.gateway';
 
 const OPEN_STATUSES: TicketStatus[] = ['RESERVED', 'CONFIRMED', 'CALLED', 'ATTENDED', 'CANCELED', 'NO_SHOW'];
-const QUEUE_INCLUDE = { specialty: true, professional: true, healthUnit: true, patient: true } as const;
+const QUEUE_INCLUDE = { specialty: true, professional: true, healthUnit: true, patient: true, batch: true } as const;
 
 @Injectable()
 export class TicketsService {
@@ -562,6 +562,8 @@ export class TicketsService {
       ticketNumber: this.formatTicketNumber(updated),
       counterLabel: updated.counterLabel ?? counterLabel,
       calledAt: updated.calledAt ?? new Date(),
+      professionalName: updated.professional.fullName,
+      batchLabel: this.batchLabel(updated.batch?.description),
     });
 
     return updated;
@@ -628,7 +630,7 @@ export class TicketsService {
       },
       orderBy: { calledAt: 'desc' },
       take: 11,
-      include: { specialty: true },
+      include: { specialty: true, professional: true, batch: true },
     });
 
     const [current, ...rest] = calls;
@@ -644,12 +646,25 @@ export class TicketsService {
     return `${ticket.specialty.code}${String(ticket.ticketNumber).padStart(3, '0')}`;
   }
 
-  private formatPublicCall(ticket: Ticket & { specialty: { code: string } }) {
+  private formatPublicCall(
+    ticket: Ticket & {
+      specialty: { code: string };
+      professional: { fullName: string };
+      batch: { description: string | null } | null;
+    },
+  ) {
     return {
       ticketNumber: this.formatTicketNumber(ticket),
       counterLabel: ticket.counterLabel,
       calledAt: ticket.calledAt,
+      professionalName: ticket.professional.fullName,
+      batchLabel: this.batchLabel(ticket.batch?.description),
     };
+  }
+
+  private batchLabel(description?: string | null): string | null {
+    const trimmed = description?.trim();
+    return trimmed ? trimmed : null;
   }
 
   // ==================== Mobile / Patient ====================

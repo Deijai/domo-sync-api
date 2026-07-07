@@ -7,6 +7,8 @@ export type QueueTicketCalledEvent = {
   ticketNumber: string;
   counterLabel: string;
   calledAt: Date;
+  professionalName: string;
+  batchLabel: string | null;
 };
 
 @Injectable()

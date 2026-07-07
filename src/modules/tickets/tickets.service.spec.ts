@@ -229,6 +229,8 @@ describe('TicketsService', () => {
         calledAt: new Date(),
         ticketNumber: 3,
         specialty: { code: 'P' },
+        professional: { fullName: 'Dr. Fulano' },
+        batch: { description: null },
       });
 
       const result = await service.callTicket('ticket-1', '0001', 'admin-1');
