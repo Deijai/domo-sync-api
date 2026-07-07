@@ -44,8 +44,10 @@ export const PERMISSIONS = {
   TICKETS_NO_SHOW: 'tickets.no-show',
   TICKETS_REOPEN: 'tickets.reopen',
   TICKETS_PRINT: 'tickets.print',
+  TICKETS_CALL: 'tickets.call',
 
   REPORTS_READ: 'reports.read',
+  REPORTS_PRINT: 'reports.print',
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -96,6 +98,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PermissionKey, string> = {
   [PERMISSIONS.TICKETS_NO_SHOW]: 'Marcar falta do paciente',
   [PERMISSIONS.TICKETS_REOPEN]: 'Reabrir ficha cancelada',
   [PERMISSIONS.TICKETS_PRINT]: 'Imprimir ficha',
+  [PERMISSIONS.TICKETS_CALL]: 'Chamar ficha na fila de atendimento',
 
   [PERMISSIONS.REPORTS_READ]: 'Consultar relatórios',
+  [PERMISSIONS.REPORTS_PRINT]: 'Gerar relatórios gerenciais em PDF',
 };

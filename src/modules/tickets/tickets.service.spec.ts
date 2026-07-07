@@ -1,7 +1,8 @@
 import { Test } from '@nestjs/testing';
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { TicketsService } from './tickets.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { QueueGateway } from './queue.gateway';
 
 function futureDate(): string {
   const date = new Date();
@@ -13,6 +14,7 @@ describe('TicketsService', () => {
   let service: TicketsService;
   let prisma: any;
   let tx: any;
+  let queueGateway: { emitTicketCalled: jest.Mock };
 
   beforeEach(async () => {
     tx = {
@@ -32,16 +34,25 @@ describe('TicketsService', () => {
       specialty: { findFirst: jest.fn() },
       professional: { findFirst: jest.fn() },
       healthUnit: { findFirst: jest.fn() },
+      patient: { findFirst: jest.fn() },
       ticketBatch: { findFirst: jest.fn() },
       ticket: {
         findFirst: jest.fn(),
+        findFirstOrThrow: jest.fn(),
         update: jest.fn(),
+        count: jest.fn(),
       },
       ticketMovement: { create: jest.fn() },
     };
 
+    queueGateway = { emitTicketCalled: jest.fn() };
+
     const module = await Test.createTestingModule({
-      providers: [TicketsService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        TicketsService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: QueueGateway, useValue: queueGateway },
+      ],
     }).compile();
 
     service = module.get(TicketsService);
@@ -176,6 +187,77 @@ describe('TicketsService', () => {
 
     it('exige ao menos um destino de transferência', async () => {
       await expect(service.transfer('ticket-1', {} as any, 'admin-1')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('assignPatient', () => {
+    it('marca consulta vinculando uma ficha disponível ao paciente informado', async () => {
+      prisma.patient.findFirst.mockResolvedValue({ id: 'patient-1' });
+      tx.ticket.updateMany.mockResolvedValue({ count: 1 });
+      tx.ticket.findUniqueOrThrow.mockResolvedValue({ id: 'ticket-1', status: 'RESERVED', patientId: 'patient-1' });
+
+      const result = await service.assignPatient('ticket-1', 'patient-1', 'admin-1');
+
+      expect(result.status).toBe('RESERVED');
+      expect(tx.ticketMovement.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ action: 'RESERVED', performedByUserId: 'admin-1' }) }),
+      );
+    });
+
+    it('rejeita paciente inexistente', async () => {
+      prisma.patient.findFirst.mockResolvedValue(null);
+
+      await expect(service.assignPatient('ticket-1', 'patient-x', 'admin-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('retorna 409 quando a ficha não está mais disponível', async () => {
+      prisma.patient.findFirst.mockResolvedValue({ id: 'patient-1' });
+      tx.ticket.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.assignPatient('ticket-1', 'patient-1', 'admin-1')).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('callTicket', () => {
+    it('chama uma ficha confirmada para um guichê e emite evento no gateway', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({ id: 'ticket-1', status: 'CONFIRMED', healthUnitId: 'unit-1' });
+      prisma.ticket.update.mockResolvedValue({
+        id: 'ticket-1',
+        status: 'CALLED',
+        healthUnitId: 'unit-1',
+        counterLabel: '0001',
+        calledAt: new Date(),
+        ticketNumber: 3,
+        specialty: { code: 'P' },
+      });
+
+      const result = await service.callTicket('ticket-1', '0001', 'admin-1');
+
+      expect(result.status).toBe('CALLED');
+      expect(queueGateway.emitTicketCalled).toHaveBeenCalledWith(
+        'unit-1',
+        expect.objectContaining({ ticketNumber: 'P003', counterLabel: '0001' }),
+      );
+    });
+
+    it('rejeita chamar uma ficha que não está confirmada nem chamada', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({ id: 'ticket-1', status: 'RESERVED' });
+
+      await expect(service.callTicket('ticket-1', '0001', 'admin-1')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('attend', () => {
+    it('permite marcar atendimento a partir de CALLED', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({ id: 'ticket-1', status: 'CALLED' });
+      prisma.ticket.update.mockResolvedValue({ id: 'ticket-1', status: 'ATTENDED' });
+
+      const result = await service.attend('ticket-1', 'admin-1');
+
+      expect(result.status).toBe('ATTENDED');
+      expect(prisma.ticketMovement.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ fromStatus: 'CALLED', toStatus: 'ATTENDED' }) }),
+      );
     });
   });
 });

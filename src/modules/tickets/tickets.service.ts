@@ -11,12 +11,17 @@ import { TransferTicketDto } from './dto/transfer-ticket.dto';
 import { ChangeDateTicketDto } from './dto/change-date-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
+import { QueueGateway } from './queue.gateway';
 
-const OPEN_STATUSES: TicketStatus[] = ['RESERVED', 'CONFIRMED', 'ATTENDED', 'CANCELED', 'NO_SHOW'];
+const OPEN_STATUSES: TicketStatus[] = ['RESERVED', 'CONFIRMED', 'CALLED', 'ATTENDED', 'CANCELED', 'NO_SHOW'];
+const QUEUE_INCLUDE = { specialty: true, professional: true, healthUnit: true, patient: true } as const;
 
 @Injectable()
 export class TicketsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly queueGateway: QueueGateway,
+  ) {}
 
   // ==================== Batches ====================
 
@@ -266,6 +271,50 @@ export class TicketsService {
     );
   }
 
+  async assignPatient(ticketId: string, patientId: string, actorUserId: string) {
+    const patient = await this.prisma.patient.findFirst({ where: { id: patientId, deletedAt: null } });
+    if (!patient) {
+      throw new NotFoundException('Paciente não encontrado.');
+    }
+
+    const ticket = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.ticket.updateMany({
+        where: {
+          id: ticketId,
+          status: 'AVAILABLE',
+          patientId: null,
+          serviceDate: { gte: this.startOfToday() },
+          deletedAt: null,
+        },
+        data: {
+          status: 'RESERVED',
+          patientId,
+          reservedAt: new Date(),
+          updatedByUserId: actorUserId,
+        },
+      });
+
+      if (result.count === 0) {
+        throw new ConflictException('Esta ficha não está mais disponível. Escolha outra ficha.');
+      }
+
+      await tx.ticketMovement.create({
+        data: {
+          ticketId,
+          fromStatus: 'AVAILABLE',
+          toStatus: 'RESERVED',
+          action: 'RESERVED',
+          description: 'Consulta marcada pelo atendente.',
+          performedByUserId: actorUserId,
+        },
+      });
+
+      return tx.ticket.findUniqueOrThrow({ where: { id: ticketId }, include: QUEUE_INCLUDE });
+    });
+
+    return ticket;
+  }
+
   async cancel(ticketId: string, dto: CancelTicketDto, actorUserId: string) {
     const ticket = await this.findTicketOrThrow(ticketId);
 
@@ -420,8 +469,8 @@ export class TicketsService {
   async attend(ticketId: string, actorUserId: string) {
     const ticket = await this.findTicketOrThrow(ticketId);
 
-    if (ticket.status !== 'CONFIRMED') {
-      throw new BadRequestException('Só é possível marcar atendimento de fichas confirmadas.');
+    if (!['CONFIRMED', 'CALLED'].includes(ticket.status)) {
+      throw new BadRequestException('Só é possível marcar atendimento de fichas confirmadas ou chamadas.');
     }
 
     const updated = await this.prisma.ticket.update({
@@ -429,7 +478,7 @@ export class TicketsService {
       data: { status: 'ATTENDED', attendedAt: new Date(), updatedByUserId: actorUserId },
     });
 
-    await this.recordMovement(ticketId, 'CONFIRMED', 'ATTENDED', 'ATTENDED', undefined, {
+    await this.recordMovement(ticketId, ticket.status, 'ATTENDED', 'ATTENDED', undefined, {
       userId: actorUserId,
     });
 
@@ -439,8 +488,8 @@ export class TicketsService {
   async noShow(ticketId: string, actorUserId: string) {
     const ticket = await this.findTicketOrThrow(ticketId);
 
-    if (!['RESERVED', 'CONFIRMED'].includes(ticket.status)) {
-      throw new BadRequestException('Só é possível marcar falta em fichas reservadas ou confirmadas.');
+    if (!['RESERVED', 'CONFIRMED', 'CALLED'].includes(ticket.status)) {
+      throw new BadRequestException('Só é possível marcar falta em fichas reservadas, confirmadas ou chamadas.');
     }
 
     const updated = await this.prisma.ticket.update({
@@ -479,6 +528,128 @@ export class TicketsService {
     });
 
     return updated;
+  }
+
+  // ==================== Fila de atendimento ====================
+
+  async callTicket(ticketId: string, counterLabel: string, actorUserId: string) {
+    const ticket = await this.findTicketOrThrow(ticketId);
+
+    if (!['CONFIRMED', 'CALLED'].includes(ticket.status)) {
+      throw new BadRequestException('Só é possível chamar fichas confirmadas.');
+    }
+
+    const fromStatus = ticket.status;
+    const updated = await this.prisma.ticket.update({
+      where: { id: ticketId },
+      data: {
+        status: 'CALLED',
+        calledAt: new Date(),
+        counterLabel,
+        calledByUserId: actorUserId,
+        updatedByUserId: actorUserId,
+      },
+      include: QUEUE_INCLUDE,
+    });
+
+    await this.recordMovement(ticketId, fromStatus, 'CALLED', 'CALLED', undefined, {
+      userId: actorUserId,
+      metadata: { counterLabel },
+    });
+
+    this.queueGateway.emitTicketCalled(updated.healthUnitId, {
+      ticketId: updated.id,
+      ticketNumber: this.formatTicketNumber(updated),
+      counterLabel: updated.counterLabel ?? counterLabel,
+      calledAt: updated.calledAt ?? new Date(),
+    });
+
+    return updated;
+  }
+
+  async callNext(healthUnitId: string, counterLabel: string, actorUserId: string) {
+    const next = await this.prisma.ticket.findFirst({
+      where: {
+        healthUnitId,
+        status: 'CONFIRMED',
+        deletedAt: null,
+        serviceDate: { gte: this.startOfToday() },
+      },
+      orderBy: { confirmedAt: 'asc' },
+    });
+
+    if (!next) {
+      throw new NotFoundException('Não há fichas confirmadas aguardando na fila desta unidade.');
+    }
+
+    return this.callTicket(next.id, counterLabel, actorUserId);
+  }
+
+  async getQueue(healthUnitId: string) {
+    const today = this.startOfToday();
+    const baseWhere = { healthUnitId, deletedAt: null, serviceDate: { gte: today } };
+
+    const [waiting, calledNow, recentCalls] = await Promise.all([
+      this.prisma.ticket.findMany({
+        where: { ...baseWhere, status: 'CONFIRMED' },
+        orderBy: { confirmedAt: 'asc' },
+        include: QUEUE_INCLUDE,
+      }),
+      this.prisma.ticket.findMany({
+        where: { ...baseWhere, status: 'CALLED' },
+        orderBy: { calledAt: 'desc' },
+        include: QUEUE_INCLUDE,
+      }),
+      this.prisma.ticket.findMany({
+        where: { ...baseWhere, calledAt: { not: null } },
+        orderBy: { calledAt: 'desc' },
+        take: 15,
+        include: QUEUE_INCLUDE,
+      }),
+    ]);
+
+    return { waiting, calledNow, recentCalls };
+  }
+
+  async getPublicPanel(healthUnitId: string) {
+    const healthUnit = await this.prisma.healthUnit.findFirst({
+      where: { id: healthUnitId, deletedAt: null },
+    });
+    if (!healthUnit) {
+      throw new NotFoundException('Unidade de saúde não encontrada.');
+    }
+
+    const calls = await this.prisma.ticket.findMany({
+      where: {
+        healthUnitId,
+        deletedAt: null,
+        calledAt: { not: null },
+        serviceDate: { gte: this.startOfToday() },
+      },
+      orderBy: { calledAt: 'desc' },
+      take: 11,
+      include: { specialty: true },
+    });
+
+    const [current, ...rest] = calls;
+
+    return {
+      healthUnit: { id: healthUnit.id, name: healthUnit.name },
+      current: current ? this.formatPublicCall(current) : null,
+      lastCalls: rest.slice(0, 10).map((ticket) => this.formatPublicCall(ticket)),
+    };
+  }
+
+  private formatTicketNumber(ticket: Ticket & { specialty: { code: string } }) {
+    return `${ticket.specialty.code}${String(ticket.ticketNumber).padStart(3, '0')}`;
+  }
+
+  private formatPublicCall(ticket: Ticket & { specialty: { code: string } }) {
+    return {
+      ticketNumber: this.formatTicketNumber(ticket),
+      counterLabel: ticket.counterLabel,
+      calledAt: ticket.calledAt,
+    };
   }
 
   // ==================== Mobile / Patient ====================
@@ -612,10 +783,10 @@ export class TicketsService {
     const where: Prisma.TicketWhereInput = {
       patientId,
       deletedAt: null,
-      status: { in: ['RESERVED', 'CONFIRMED'] },
+      status: { in: ['RESERVED', 'CONFIRMED', 'CALLED'] },
     };
 
-    return paginate(
+    const result = await paginate(
       () => this.prisma.ticket.count({ where }),
       (skip, take) =>
         this.prisma.ticket.findMany({
@@ -628,6 +799,32 @@ export class TicketsService {
       page,
       pageSize,
     );
+
+    const data = await Promise.all(
+      result.data.map(async (ticket) => ({
+        ...ticket,
+        queuePosition: await this.computeQueuePosition(ticket),
+      })),
+    );
+
+    return { ...result, data };
+  }
+
+  private async computeQueuePosition(ticket: Ticket): Promise<number | null> {
+    if (ticket.status !== 'CONFIRMED') {
+      return null;
+    }
+
+    const aheadCount = await this.prisma.ticket.count({
+      where: {
+        healthUnitId: ticket.healthUnitId,
+        status: 'CONFIRMED',
+        deletedAt: null,
+        confirmedAt: { lt: ticket.confirmedAt ?? new Date() },
+      },
+    });
+
+    return aheadCount + 1;
   }
 
   async findMyHistory(patientId: string, query: PaginationQueryDto) {

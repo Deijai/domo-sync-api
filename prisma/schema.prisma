@@ -36,6 +36,7 @@ enum TicketStatus {
   AVAILABLE
   RESERVED
   CONFIRMED
+  CALLED
   ATTENDED
   CANCELED
   NO_SHOW
@@ -50,6 +51,7 @@ enum TicketMovementAction {
   TRANSFERRED
   DATE_CHANGED
   CONFIRMED
+  CALLED
   ATTENDED
   NO_SHOW
   EXPIRED
@@ -74,6 +76,7 @@ model User {
   createdTicketBatches TicketBatch[]     @relation("TicketBatchCreatedBy")
   createdTickets       Ticket[]          @relation("TicketCreatedBy")
   updatedTickets       Ticket[]          @relation("TicketUpdatedBy")
+  calledTickets        Ticket[]          @relation("TicketCalledBy")
   ticketMovements      TicketMovement[]  @relation("TicketMovementPerformedByUser")
 
   @@index([status])
@@ -283,6 +286,10 @@ model Ticket {
   status             TicketStatus @default(AVAILABLE)
   reservedAt         DateTime?
   confirmedAt        DateTime?
+  calledAt           DateTime?
+  counterLabel       String?
+  calledByUserId     String?
+  calledByUser       User?        @relation("TicketCalledBy", fields: [calledByUserId], references: [id])
   attendedAt         DateTime?
   canceledAt         DateTime?
   canceledReason     String?

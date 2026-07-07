@@ -14,6 +14,10 @@ import { QueryTicketsDto } from './dto/query-tickets.dto';
 import { CancelTicketDto } from './dto/cancel-ticket.dto';
 import { TransferTicketDto } from './dto/transfer-ticket.dto';
 import { ChangeDateTicketDto } from './dto/change-date-ticket.dto';
+import { AssignTicketDto } from './dto/assign-ticket.dto';
+import { CallTicketDto } from './dto/call-ticket.dto';
+import { CallNextTicketDto } from './dto/call-next-ticket.dto';
+import { QueueQueryDto } from './dto/queue-query.dto';
 
 @ApiTags('Tickets')
 @ApiBearerAuth()
@@ -61,6 +65,23 @@ export class TicketsController {
     return this.ticketsService.createTicket(dto, principal.sub);
   }
 
+  @Get('queue')
+  @RequirePermissions(PERMISSIONS.TICKETS_READ)
+  @ApiOperation({ summary: 'Fila de atendimento da unidade (fichas confirmadas aguardando, chamadas e histórico recente)' })
+  @ApiResponse({ status: 200, description: 'Estado atual da fila.' })
+  getQueue(@Query() query: QueueQueryDto) {
+    return this.ticketsService.getQueue(query.healthUnitId);
+  }
+
+  @Post('queue/call-next')
+  @RequirePermissions(PERMISSIONS.TICKETS_CALL)
+  @ApiOperation({ summary: 'Chama a próxima ficha confirmada da fila da unidade' })
+  @ApiResponse({ status: 200, description: 'Ficha chamada.' })
+  @ApiResponse({ status: 404, description: 'Não há fichas confirmadas aguardando.' })
+  callNext(@Body() dto: CallNextTicketDto, @CurrentUser() principal: JwtPayload) {
+    return this.ticketsService.callNext(dto.healthUnitId, dto.counterLabel, principal.sub);
+  }
+
   @Get(':id')
   @RequirePermissions(PERMISSIONS.TICKETS_READ)
   @ApiOperation({ summary: 'Detalha uma ficha' })
@@ -84,6 +105,23 @@ export class TicketsController {
   @ApiResponse({ status: 200, description: 'Lista paginada de movimentações.' })
   findMovements(@Param('id') id: string, @Query() query: PaginationQueryDto) {
     return this.ticketsService.findMovements(id, query);
+  }
+
+  @Post(':id/assign')
+  @RequirePermissions(PERMISSIONS.TICKETS_RESERVE)
+  @ApiOperation({ summary: 'Marca consulta: vincula uma ficha disponível a um paciente (AVAILABLE -> RESERVED)' })
+  @ApiResponse({ status: 200, description: 'Ficha vinculada ao paciente.' })
+  @ApiResponse({ status: 409, description: 'Ficha não está mais disponível.' })
+  assign(@Param('id') id: string, @Body() dto: AssignTicketDto, @CurrentUser() principal: JwtPayload) {
+    return this.ticketsService.assignPatient(id, dto.patientId, principal.sub);
+  }
+
+  @Post(':id/call')
+  @RequirePermissions(PERMISSIONS.TICKETS_CALL)
+  @ApiOperation({ summary: 'Chama a ficha para um guichê (CONFIRMED -> CALLED, ou rechama/troca guichê)' })
+  @ApiResponse({ status: 200, description: 'Ficha chamada.' })
+  call(@Param('id') id: string, @Body() dto: CallTicketDto, @CurrentUser() principal: JwtPayload) {
+    return this.ticketsService.callTicket(id, dto.counterLabel, principal.sub);
   }
 
   @Post(':id/cancel')
