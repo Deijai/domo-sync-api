@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Professional, ProfessionalSpecialty, SimpleStatus, Specialty } from '@prisma/client';
+import { AccountStatus, Professional, ProfessionalSpecialty, SimpleStatus, Specialty } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { paginate } from '../../common/pagination/paginate.util';
 import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
@@ -7,8 +7,12 @@ import { CreateProfessionalDto } from './dto/create-professional.dto';
 import { UpdateProfessionalDto } from './dto/update-professional.dto';
 import { SetProfessionalSpecialtiesDto } from './dto/set-professional-specialties.dto';
 
+const USER_SUMMARY_SELECT = { id: true, email: true, status: true } as const;
+type UserSummary = { id: string; email: string; status: AccountStatus } | null;
+
 type ProfessionalWithSpecialties = Professional & {
   specialties: (ProfessionalSpecialty & { specialty: Specialty })[];
+  user: UserSummary;
 };
 
 @Injectable()
@@ -39,7 +43,7 @@ export class ProfessionalsService {
           skip,
           take,
           orderBy: { fullName: 'asc' },
-          include: { specialties: { include: { specialty: true } } },
+          include: { specialties: { include: { specialty: true } }, user: { select: USER_SUMMARY_SELECT } },
         });
         return professionals.map((professional) => this.toResponse(professional));
       },
@@ -56,7 +60,7 @@ export class ProfessionalsService {
   async create(dto: CreateProfessionalDto) {
     const professional = await this.prisma.professional.create({
       data: dto,
-      include: { specialties: { include: { specialty: true } } },
+      include: { specialties: { include: { specialty: true } }, user: { select: USER_SUMMARY_SELECT } },
     });
     return this.toResponse(professional);
   }
@@ -67,7 +71,7 @@ export class ProfessionalsService {
     const professional = await this.prisma.professional.update({
       where: { id },
       data: dto,
-      include: { specialties: { include: { specialty: true } } },
+      include: { specialties: { include: { specialty: true } }, user: { select: USER_SUMMARY_SELECT } },
     });
 
     return this.toResponse(professional);
@@ -102,7 +106,7 @@ export class ProfessionalsService {
   private async findProfessionalOrThrow(id: string): Promise<ProfessionalWithSpecialties> {
     const professional = await this.prisma.professional.findFirst({
       where: { id, deletedAt: null },
-      include: { specialties: { include: { specialty: true } } },
+      include: { specialties: { include: { specialty: true } }, user: { select: USER_SUMMARY_SELECT } },
     });
 
     if (!professional) {
@@ -127,6 +131,7 @@ export class ProfessionalsService {
         id: professionalSpecialty.specialty.id,
         name: professionalSpecialty.specialty.name,
       })),
+      user: professional.user,
       createdAt: professional.createdAt,
       updatedAt: professional.updatedAt,
     };

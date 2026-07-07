@@ -24,4 +24,9 @@ export class CreateUserDto {
   @IsOptional()
   @IsEnum(AccountStatus)
   status?: AccountStatus;
+
+  @ApiPropertyOptional({ description: 'Profissional vinculado a este login (no máximo 1 login por profissional)' })
+  @IsOptional()
+  @IsUUID()
+  professionalId?: string;
 }

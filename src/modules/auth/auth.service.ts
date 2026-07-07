@@ -18,7 +18,10 @@ export class AuthService {
   async login(dto: LoginDto) {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
-      include: { role: { include: { permissions: { include: { permission: true } } } } },
+      include: {
+        role: { include: { permissions: { include: { permission: true } } } },
+        professional: { select: { id: true, fullName: true } },
+      },
     });
 
     if (!user || user.deletedAt || user.status !== 'ACTIVE') {
@@ -32,7 +35,7 @@ export class AuthService {
 
     const permissions = user.role.permissions.map((rolePermission) => rolePermission.permission.key);
     const tokens = await this.issueTokens(
-      { sub: user.id, type: 'USER', roleId: user.roleId, permissions },
+      { sub: user.id, type: 'USER', roleId: user.roleId, permissions, professionalId: user.professionalId ?? undefined },
       { userId: user.id },
     );
 
@@ -44,6 +47,7 @@ export class AuthService {
         email: user.email,
         status: user.status,
         role: { id: user.role.id, name: user.role.name },
+        professional: user.professional,
       },
       type: 'USER' as const,
     };
@@ -108,7 +112,10 @@ export class AuthService {
     if (payload.type === 'USER') {
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
-        include: { role: { include: { permissions: { include: { permission: true } } } } },
+        include: {
+          role: { include: { permissions: { include: { permission: true } } } },
+          professional: { select: { id: true, fullName: true } },
+        },
       });
 
       if (!user || user.deletedAt || user.status !== 'ACTIVE') {
@@ -117,7 +124,7 @@ export class AuthService {
 
       const permissions = user.role.permissions.map((rolePermission) => rolePermission.permission.key);
       const tokens = await this.issueTokens(
-        { sub: user.id, type: 'USER', roleId: user.roleId, permissions },
+        { sub: user.id, type: 'USER', roleId: user.roleId, permissions, professionalId: user.professionalId ?? undefined },
         { userId: user.id },
       );
 
@@ -129,6 +136,7 @@ export class AuthService {
           email: user.email,
           status: user.status,
           role: { id: user.role.id, name: user.role.name },
+          professional: user.professional,
         },
         type: 'USER' as const,
       };
@@ -167,7 +175,7 @@ export class AuthService {
     if (payload.type === 'USER') {
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
-        include: { role: true },
+        include: { role: true, professional: { select: { id: true, fullName: true } } },
       });
       if (!user) {
         throw new NotFoundException('Usuário não encontrado.');
@@ -178,6 +186,7 @@ export class AuthService {
         email: user.email,
         status: user.status,
         role: { id: user.role.id, name: user.role.name },
+        professional: user.professional,
         type: 'USER' as const,
       };
     }
@@ -192,7 +201,7 @@ export class AuthService {
   }
 
   private async issueTokens(
-    payload: Pick<JwtPayload, 'sub' | 'type' | 'roleId' | 'permissions'>,
+    payload: Pick<JwtPayload, 'sub' | 'type' | 'roleId' | 'permissions' | 'professionalId'>,
     owner: { userId?: string; patientId?: string },
   ) {
     const accessToken = await this.jwtService.signAsync(payload, {

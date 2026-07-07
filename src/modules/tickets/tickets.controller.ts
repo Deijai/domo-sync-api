@@ -69,8 +69,8 @@ export class TicketsController {
   @RequirePermissions(PERMISSIONS.TICKETS_READ)
   @ApiOperation({ summary: 'Fila de atendimento da unidade (fichas confirmadas aguardando, chamadas e histórico recente)' })
   @ApiResponse({ status: 200, description: 'Estado atual da fila.' })
-  getQueue(@Query() query: QueueQueryDto) {
-    return this.ticketsService.getQueue(query.healthUnitId);
+  getQueue(@Query() query: QueueQueryDto, @CurrentUser() principal: JwtPayload) {
+    return this.ticketsService.getQueue(query.healthUnitId, principal.professionalId);
   }
 
   @Post('queue/call-next')
@@ -79,7 +79,7 @@ export class TicketsController {
   @ApiResponse({ status: 200, description: 'Ficha chamada.' })
   @ApiResponse({ status: 404, description: 'Não há fichas confirmadas aguardando.' })
   callNext(@Body() dto: CallNextTicketDto, @CurrentUser() principal: JwtPayload) {
-    return this.ticketsService.callNext(dto.healthUnitId, dto.counterLabel, principal.sub);
+    return this.ticketsService.callNext(dto.healthUnitId, dto.counterLabel, principal.sub, principal.professionalId);
   }
 
   @Get(':id')
@@ -121,7 +121,7 @@ export class TicketsController {
   @ApiOperation({ summary: 'Chama a ficha para um guichê (CONFIRMED -> CALLED, ou rechama/troca guichê)' })
   @ApiResponse({ status: 200, description: 'Ficha chamada.' })
   call(@Param('id') id: string, @Body() dto: CallTicketDto, @CurrentUser() principal: JwtPayload) {
-    return this.ticketsService.callTicket(id, dto.counterLabel, principal.sub);
+    return this.ticketsService.callTicket(id, dto.counterLabel, principal.sub, principal.professionalId);
   }
 
   @Post(':id/cancel')
@@ -162,7 +162,7 @@ export class TicketsController {
   @ApiOperation({ summary: 'Marca o atendimento como realizado (CONFIRMED -> ATTENDED)' })
   @ApiResponse({ status: 200, description: 'Atendimento marcado.' })
   attend(@Param('id') id: string, @CurrentUser() principal: JwtPayload) {
-    return this.ticketsService.attend(id, principal.sub);
+    return this.ticketsService.attend(id, principal.sub, principal.professionalId);
   }
 
   @Post(':id/no-show')
@@ -170,7 +170,7 @@ export class TicketsController {
   @ApiOperation({ summary: 'Marca falta do paciente' })
   @ApiResponse({ status: 200, description: 'Falta registrada.' })
   noShow(@Param('id') id: string, @CurrentUser() principal: JwtPayload) {
-    return this.ticketsService.noShow(id, principal.sub);
+    return this.ticketsService.noShow(id, principal.sub, principal.professionalId);
   }
 
   @Post(':id/reopen')

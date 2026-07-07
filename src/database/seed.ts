@@ -4,7 +4,7 @@ dotenv.config();
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { hashPassword } from '../common/utils/password.util';
-import { PERMISSION_DESCRIPTIONS } from '../common/constants/permissions.const';
+import { PERMISSION_DESCRIPTIONS, PERMISSIONS } from '../common/constants/permissions.const';
 
 const adapter = new PrismaPg(process.env.DATABASE_URL as string);
 const prisma = new PrismaClient({ adapter });
@@ -31,6 +31,34 @@ async function seedAdminRole(permissionIds: string[]) {
       isSystem: true,
     },
   });
+
+  await prisma.rolePermission.createMany({
+    data: permissionIds.map((permissionId) => ({ roleId: role.id, permissionId })),
+    skipDuplicates: true,
+  });
+
+  return role;
+}
+
+async function seedProfessionalRole(allPermissions: { id: string; key: string }[]) {
+  const role = await prisma.role.upsert({
+    where: { name: 'PROFISSIONAL' },
+    update: {},
+    create: {
+      name: 'PROFISSIONAL',
+      description: 'Médico(a) — vê e atende só as próprias fichas na fila de atendimento.',
+      isSystem: true,
+    },
+  });
+
+  const keys: string[] = [
+    PERMISSIONS.TICKETS_READ,
+    PERMISSIONS.TICKETS_ATTEND,
+    PERMISSIONS.TICKETS_NO_SHOW,
+    PERMISSIONS.TICKETS_PRINT,
+    PERMISSIONS.HEALTH_UNITS_READ,
+  ];
+  const permissionIds = allPermissions.filter((p) => keys.includes(p.key)).map((p) => p.id);
 
   await prisma.rolePermission.createMany({
     data: permissionIds.map((permissionId) => ({ roleId: role.id, permissionId })),
@@ -112,12 +140,14 @@ async function seedSampleData() {
 async function main() {
   const permissions = await seedPermissions();
   const adminRole = await seedAdminRole(permissions.map((p) => p.id));
+  const professionalRole = await seedProfessionalRole(permissions);
   await seedAdminUser(adminRole.id);
   await seedSampleData();
 
   console.log('Seed concluído com sucesso.');
   console.log(`Permissões: ${permissions.length}`);
   console.log(`Role ADMIN: ${adminRole.id}`);
+  console.log(`Role PROFISSIONAL: ${professionalRole.id}`);
   console.log(`Login admin: ${process.env.ADMIN_EMAIL ?? 'admin@poupafiladma.local'}`);
 }
 

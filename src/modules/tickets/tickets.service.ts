@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, Ticket, TicketMovementAction, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { paginate } from '../../common/pagination/paginate.util';
@@ -466,8 +466,9 @@ export class TicketsService {
     return updated;
   }
 
-  async attend(ticketId: string, actorUserId: string) {
+  async attend(ticketId: string, actorUserId: string, actorProfessionalId?: string) {
     const ticket = await this.findTicketOrThrow(ticketId);
+    this.assertProfessionalOwnership(ticket, actorProfessionalId);
 
     if (!['CONFIRMED', 'CALLED'].includes(ticket.status)) {
       throw new BadRequestException('Só é possível marcar atendimento de fichas confirmadas ou chamadas.');
@@ -485,8 +486,9 @@ export class TicketsService {
     return updated;
   }
 
-  async noShow(ticketId: string, actorUserId: string) {
+  async noShow(ticketId: string, actorUserId: string, actorProfessionalId?: string) {
     const ticket = await this.findTicketOrThrow(ticketId);
+    this.assertProfessionalOwnership(ticket, actorProfessionalId);
 
     if (!['RESERVED', 'CONFIRMED', 'CALLED'].includes(ticket.status)) {
       throw new BadRequestException('Só é possível marcar falta em fichas reservadas, confirmadas ou chamadas.');
@@ -532,8 +534,9 @@ export class TicketsService {
 
   // ==================== Fila de atendimento ====================
 
-  async callTicket(ticketId: string, counterLabel: string, actorUserId: string) {
+  async callTicket(ticketId: string, counterLabel: string, actorUserId: string, actorProfessionalId?: string) {
     const ticket = await this.findTicketOrThrow(ticketId);
+    this.assertProfessionalOwnership(ticket, actorProfessionalId);
 
     if (!['CONFIRMED', 'CALLED'].includes(ticket.status)) {
       throw new BadRequestException('Só é possível chamar fichas confirmadas.');
@@ -569,13 +572,14 @@ export class TicketsService {
     return updated;
   }
 
-  async callNext(healthUnitId: string, counterLabel: string, actorUserId: string) {
+  async callNext(healthUnitId: string, counterLabel: string, actorUserId: string, actorProfessionalId?: string) {
     const next = await this.prisma.ticket.findFirst({
       where: {
         healthUnitId,
         status: 'CONFIRMED',
         deletedAt: null,
         serviceDate: { gte: this.startOfToday() },
+        ...(actorProfessionalId ? { professionalId: actorProfessionalId } : {}),
       },
       orderBy: { confirmedAt: 'asc' },
     });
@@ -584,12 +588,17 @@ export class TicketsService {
       throw new NotFoundException('Não há fichas confirmadas aguardando na fila desta unidade.');
     }
 
-    return this.callTicket(next.id, counterLabel, actorUserId);
+    return this.callTicket(next.id, counterLabel, actorUserId, actorProfessionalId);
   }
 
-  async getQueue(healthUnitId: string) {
+  async getQueue(healthUnitId: string, actorProfessionalId?: string) {
     const today = this.startOfToday();
-    const baseWhere = { healthUnitId, deletedAt: null, serviceDate: { gte: today } };
+    const baseWhere = {
+      healthUnitId,
+      deletedAt: null,
+      serviceDate: { gte: today },
+      ...(actorProfessionalId ? { professionalId: actorProfessionalId } : {}),
+    };
 
     const [waiting, calledNow, recentCalls] = await Promise.all([
       this.prisma.ticket.findMany({
@@ -640,6 +649,17 @@ export class TicketsService {
       current: current ? this.formatPublicCall(current) : null,
       lastCalls: rest.slice(0, 10).map((ticket) => this.formatPublicCall(ticket)),
     };
+  }
+
+  /**
+   * Quando o ator é um profissional logado (User vinculado a um Professional),
+   * ele só pode operar fichas que são dele — nunca de outro médico. Atendentes
+   * (sem professionalId no JWT) não passam por essa checagem.
+   */
+  private assertProfessionalOwnership(ticket: Ticket, actorProfessionalId?: string) {
+    if (actorProfessionalId && ticket.professionalId !== actorProfessionalId) {
+      throw new ForbiddenException('Esta ficha pertence a outro profissional.');
+    }
   }
 
   private formatTicketNumber(ticket: Ticket & { specialty: { code: string } }) {

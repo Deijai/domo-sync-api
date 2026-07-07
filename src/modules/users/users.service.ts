@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { AccountStatus, Prisma, Role, User } from '@prisma/client';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { AccountStatus, Prisma, Professional, Role, User } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { paginate } from '../../common/pagination/paginate.util';
 import { hashPassword } from '../../common/utils/password.util';
@@ -7,7 +7,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
 
-type UserWithRole = User & { role: Role };
+type UserWithRole = User & { role: Role; professional: Pick<Professional, 'id' | 'fullName'> | null };
 
 @Injectable()
 export class UsersService {
@@ -38,7 +38,7 @@ export class UsersService {
           skip,
           take,
           orderBy: { [orderBy]: orderDirection },
-          include: { role: true },
+          include: { role: true, professional: { select: { id: true, fullName: true } } },
         });
         return users.map((user) => this.toResponse(user));
       },
@@ -50,7 +50,7 @@ export class UsersService {
   async findOne(id: string) {
     const user = await this.prisma.user.findFirst({
       where: { id, deletedAt: null },
-      include: { role: true },
+      include: { role: true, professional: { select: { id: true, fullName: true } } },
     });
 
     if (!user) {
@@ -61,6 +61,10 @@ export class UsersService {
   }
 
   async create(dto: CreateUserDto) {
+    if (dto.professionalId) {
+      await this.assertProfessionalLinkable(dto.professionalId);
+    }
+
     const passwordHash = await hashPassword(dto.password);
 
     const user = await this.prisma.user.create({
@@ -70,8 +74,9 @@ export class UsersService {
         passwordHash,
         roleId: dto.roleId,
         status: dto.status,
+        professionalId: dto.professionalId,
       },
-      include: { role: true },
+      include: { role: true, professional: { select: { id: true, fullName: true } } },
     });
 
     return this.toResponse(user);
@@ -80,6 +85,10 @@ export class UsersService {
   async update(id: string, dto: UpdateUserDto) {
     await this.findOne(id);
 
+    if (dto.professionalId) {
+      await this.assertProfessionalLinkable(dto.professionalId, id);
+    }
+
     const user = await this.prisma.user.update({
       where: { id },
       data: {
@@ -87,9 +96,10 @@ export class UsersService {
         email: dto.email,
         roleId: dto.roleId,
         status: dto.status,
+        professionalId: dto.professionalId,
         ...(dto.password ? { passwordHash: await hashPassword(dto.password) } : {}),
       },
-      include: { role: true },
+      include: { role: true, professional: { select: { id: true, fullName: true } } },
     });
 
     return this.toResponse(user);
@@ -100,10 +110,26 @@ export class UsersService {
 
     await this.prisma.user.update({
       where: { id },
-      data: { deletedAt: new Date() },
+      data: { deletedAt: new Date(), professionalId: null },
     });
 
     return { message: 'Usuário removido com sucesso.' };
+  }
+
+  private async assertProfessionalLinkable(professionalId: string, excludingUserId?: string) {
+    const professional = await this.prisma.professional.findFirst({
+      where: { id: professionalId, deletedAt: null },
+    });
+    if (!professional) {
+      throw new NotFoundException('Profissional não encontrado.');
+    }
+
+    const linkedUser = await this.prisma.user.findFirst({
+      where: { professionalId, deletedAt: null, ...(excludingUserId ? { id: { not: excludingUserId } } : {}) },
+    });
+    if (linkedUser) {
+      throw new ConflictException('Este profissional já tem um login vinculado.');
+    }
   }
 
   private toResponse(user: UserWithRole) {
@@ -113,6 +139,8 @@ export class UsersService {
       email: user.email,
       status: user.status,
       role: { id: user.role.id, name: user.role.name },
+      professionalId: user.professionalId,
+      professional: user.professional,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     };

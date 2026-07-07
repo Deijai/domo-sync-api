@@ -5,4 +5,5 @@ export interface JwtPayload {
   type: PrincipalType;
   roleId?: string;
   permissions?: string[];
+  professionalId?: string;
 }
