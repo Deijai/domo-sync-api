@@ -1,0 +1,365 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==================== Enums ====================
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+enum SimpleStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  NOT_INFORMED
+}
+
+enum TicketBatchStatus {
+  ACTIVE
+  CANCELED
+  FINISHED
+}
+
+enum TicketStatus {
+  AVAILABLE
+  RESERVED
+  CONFIRMED
+  ATTENDED
+  CANCELED
+  NO_SHOW
+  TRANSFERRED
+  EXPIRED
+}
+
+enum TicketMovementAction {
+  CREATED
+  RESERVED
+  CANCELED
+  TRANSFERRED
+  DATE_CHANGED
+  CONFIRMED
+  ATTENDED
+  NO_SHOW
+  EXPIRED
+  REOPENED
+}
+
+// ==================== Access control ====================
+
+model User {
+  id           String        @id @default(uuid())
+  name         String
+  email        String        @unique
+  passwordHash String
+  status       AccountStatus @default(ACTIVE)
+  roleId       String
+  role         Role          @relation(fields: [roleId], references: [id])
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?
+
+  refreshTokens       RefreshToken[]
+  createdTicketBatches TicketBatch[]     @relation("TicketBatchCreatedBy")
+  createdTickets       Ticket[]          @relation("TicketCreatedBy")
+  updatedTickets       Ticket[]          @relation("TicketUpdatedBy")
+  ticketMovements      TicketMovement[]  @relation("TicketMovementPerformedByUser")
+
+  @@index([status])
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  users       User[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  description String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ==================== Patient ====================
+
+model Patient {
+  id             String        @id @default(uuid())
+  fullName       String
+  cpf            String        @unique
+  rg             String?
+  birthDate      DateTime
+  gender         Gender        @default(NOT_INFORMED)
+  motherName     String?
+  fatherName     String?
+  susCard        String?       @unique
+  phone          String?
+  whatsapp       String?
+  email          String?       @unique
+  passwordHash   String
+  zipCode        String?
+  state          String?
+  city           String?
+  neighborhood   String?
+  street         String?
+  number         String?
+  complement     String?
+  referencePoint String?
+  status         AccountStatus @default(ACTIVE)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  deletedAt      DateTime?
+
+  refreshTokens   RefreshToken[]
+  tickets         Ticket[]         @relation("TicketPatient")
+  ticketMovements TicketMovement[] @relation("TicketMovementPerformedByPatient")
+
+  @@index([status])
+  @@map("patients")
+}
+
+// ==================== Specialty / Professional / Health Unit ====================
+
+model Specialty {
+  id          String       @id @default(uuid())
+  code        String       @unique
+  name        String       @unique
+  description String?
+  status      SimpleStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  deletedAt   DateTime?
+
+  professionals ProfessionalSpecialty[]
+  ticketBatches TicketBatch[]
+  tickets       Ticket[]
+
+  @@map("specialties")
+}
+
+model Professional {
+  id            String       @id @default(uuid())
+  fullName      String
+  cpf           String       @unique
+  councilType   String?
+  councilNumber String?
+  councilState  String?
+  phone         String?
+  email         String?
+  status        SimpleStatus @default(ACTIVE)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  deletedAt     DateTime?
+
+  specialties   ProfessionalSpecialty[]
+  ticketBatches TicketBatch[]
+  tickets       Ticket[]
+
+  @@map("professionals")
+}
+
+model ProfessionalSpecialty {
+  professionalId String
+  specialtyId    String
+  professional   Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  specialty      Specialty    @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+
+  @@id([professionalId, specialtyId])
+  @@unique([professionalId, specialtyId])
+  @@map("professional_specialties")
+}
+
+model HealthUnit {
+  id              String       @id @default(uuid())
+  name            String
+  code            String       @unique
+  phone           String?
+  zipCode         String?
+  state           String?
+  city            String?
+  neighborhood    String?
+  street          String?
+  number          String?
+  complement      String?
+  status          SimpleStatus @default(ACTIVE)
+  cnpj            String?
+  logoUrl         String?
+  institutionName String?
+  stateName       String?
+  isDefault       Boolean      @default(false)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  deletedAt       DateTime?
+
+  ticketBatches TicketBatch[]
+  tickets       Ticket[]
+
+  @@map("health_units")
+}
+
+// ==================== Tickets ====================
+
+model TicketBatch {
+  id                 String            @id @default(uuid())
+  description        String?
+  specialtyId        String
+  specialty          Specialty         @relation(fields: [specialtyId], references: [id])
+  professionalId     String
+  professional       Professional      @relation(fields: [professionalId], references: [id])
+  healthUnitId       String
+  healthUnit         HealthUnit        @relation(fields: [healthUnitId], references: [id])
+  serviceDate        DateTime
+  totalTickets       Int
+  startTime          String?
+  endTime            String?
+  arrivalInstruction String            @default("Compareça com 1 hora de antecedência.")
+  createdByUserId    String
+  createdByUser      User              @relation("TicketBatchCreatedBy", fields: [createdByUserId], references: [id])
+  status             TicketBatchStatus @default(ACTIVE)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  deletedAt          DateTime?
+
+  tickets Ticket[]
+
+  @@index([serviceDate])
+  @@index([status])
+  @@map("ticket_batches")
+}
+
+model Ticket {
+  id                 String       @id @default(uuid())
+  ticketNumber       Int
+  batchId            String?
+  batch              TicketBatch? @relation(fields: [batchId], references: [id])
+  specialtyId        String
+  specialty          Specialty    @relation(fields: [specialtyId], references: [id])
+  professionalId     String
+  professional       Professional @relation(fields: [professionalId], references: [id])
+  healthUnitId       String
+  healthUnit         HealthUnit   @relation(fields: [healthUnitId], references: [id])
+  patientId          String?
+  patient            Patient?     @relation("TicketPatient", fields: [patientId], references: [id])
+  serviceDate        DateTime
+  scheduledTime      String?
+  arrivalInstruction String
+  status             TicketStatus @default(AVAILABLE)
+  reservedAt         DateTime?
+  confirmedAt        DateTime?
+  attendedAt         DateTime?
+  canceledAt         DateTime?
+  canceledReason     String?
+  transferredAt      DateTime?
+  createdByUserId    String?
+  createdByUser      User?        @relation("TicketCreatedBy", fields: [createdByUserId], references: [id])
+  updatedByUserId    String?
+  updatedByUser      User?        @relation("TicketUpdatedBy", fields: [updatedByUserId], references: [id])
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  deletedAt          DateTime?
+
+  movements TicketMovement[]
+
+  @@unique([batchId, ticketNumber])
+  @@index([status])
+  @@index([serviceDate])
+  @@index([specialtyId])
+  @@index([professionalId])
+  @@index([patientId])
+  @@index([healthUnitId])
+  @@index([batchId])
+  @@map("tickets")
+}
+
+model TicketMovement {
+  id                    String               @id @default(uuid())
+  ticketId              String
+  ticket                Ticket               @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  fromStatus            TicketStatus?
+  toStatus              TicketStatus
+  action                TicketMovementAction
+  description           String?
+  performedByUserId     String?
+  performedByUser       User?                @relation("TicketMovementPerformedByUser", fields: [performedByUserId], references: [id])
+  performedByPatientId  String?
+  performedByPatient    Patient?             @relation("TicketMovementPerformedByPatient", fields: [performedByPatientId], references: [id])
+  metadata              Json?
+  createdAt             DateTime             @default(now())
+
+  @@index([ticketId])
+  @@map("ticket_movements")
+}
+
+// ==================== Auth / Audit ====================
+
+model RefreshToken {
+  id         String    @id @default(uuid())
+  userId     String?
+  user       User?     @relation(fields: [userId], references: [id])
+  patientId  String?
+  patient    Patient?  @relation(fields: [patientId], references: [id])
+  tokenHash  String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([patientId])
+  @@map("refresh_tokens")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  actorUserId    String?
+  actorPatientId String?
+  entity         String
+  entityId       String
+  action         String
+  before         Json?
+  after          Json?
+  ip             String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([actorUserId])
+  @@index([actorPatientId])
+  @@map("audit_logs")
+}
